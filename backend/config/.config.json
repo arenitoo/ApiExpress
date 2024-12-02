@@ -1,0 +1,23 @@
+{
+  "development": {
+    "username": "postgres.sgnqvkusqyqfspjveaor",
+    "password": "8298407652aA",
+    "database": "postgres",
+    "host": "aws-0-sa-east-1.pooler.supabase.com",
+    "dialect": "postgres"
+  },
+  "test": {
+    "username": "postgres",
+    "password": "postgres",
+    "database": "projeto_orm_test",
+    "host": "127.0.0.1",
+    "dialect": "postgres"
+  },
+  "production": {
+    "username": "root",
+    "password": null,
+    "database": "projeto_orm_production",
+    "host": "127.0.0.1",
+    "dialect": "mysql"
+  }
+}
