@@ -1,50 +1,97 @@
-const { Category, Product } = require('../models');
 const { v4: uuidv4 } = require('uuid');
-const transporter = require('../config/nodemailer');
-const authMiddleware = require('../middlewares/auth');
-
-
+const { Category } = require('../models');
+const uuid = require('uuid');
+const redis = require('../config/redisClient');
+const categoryQueue = require('../queue/category');
 /**
- * Creates a new category
- * @param {*} req
- * @param {*} res
- * @returns Object
+* @swagger
+ * /categories:
+ *   post:
+ *     summary: Cria uma nova categoria
+ *     tags: [Categories]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Nome da categoria
+ *     responses:
+ *       201:
+ *         description: Categoria criada com sucesso
+ *       500:
+ *         description: Erro no servidor
  */
+
 const createCategory = async (req, res) => {
+  const transformedData = {
+    ...req.body,
+    id: uuidv4(),
+  };
   try {
-    const category = await Category.create({...req.body, id: uuidv4()});
-
-    // Enviar email de notificação para o administrador
-    const mailOptions = {
-      from: 'lucas.barros@uncisal.edu.br',
-      to: 'lucasbarros445ag@gmail.com',
-      subject: 'Nova categoria criada',
-      text: `Uma nova categoria foi criada na aula do dia 18/11/2024: ${category.name}`,
-      html: `<p>Uma nova categoria foi criada na aula do dia 18/11/2024: ${category.name}</p>`,
-    };
-
-    // Enviar email
-    await transporter.sendMail(mailOptions);
-
+    const category = await Category.create({...req.body, id: uuid.v4()});
+    await redis.del('categories:list');
+    console.log("invalidado cache de categorias");
     return res.status(201).json(
       category,
     );
+    const job = await categoryQueue.add({ operation: 'create', data: transformedData });
+    return res.status(201).json({ message: 'Categoria em processamento', jobId: job.id });
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 };
 
 /**
- * Fetches all categories
- * @param {*} req
- * @param {*} res
- * @returns Object
+ * @swagger
+ * /categories:
+ *   get:
+ *     summary: Retorna todas as categorias
+ *     tags: [Categories]
+ *     responses:
+ *       200:
+ *         description: Lista de categorias retornada com sucesso
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id:
+ *                     type: string
+ *                     description: ID da categoria
+ *                   name:
+ *                     type: string
+ *                     description: Nome da categoria
+ *                   createdAt:
+ *                     type: string
+ *                     format: date-time
+ *                     description: Data de criação
+ *                   updatedAt:
+ *                     type: string
+ *                     format: date-time
+ *                     description: Data da última atualização
+ *       500:
+ *         description: Erro no servidor
  */
 const getAllCategories = async (req, res) => {
   try {
+    const cacheKey = 'categories:list';
+    const cacheData = await redis.get(cacheKey);
+    if (cacheData) {
+      console.log('Dados do cache de categoria obtidos');
+      return res.status(200).json(JSON.parse(cacheData));
+    }
     const categories = await Category.findAll({
       order: [['createdAt', 'DESC']],
     });
+    // Salva em cache por 1 hora
+    await redis.set(cacheKey, JSON.stringify(categories), 'EX', 3600);
+    console.log('Dados das categorias armazenados em cache');
     return res.status(200).json(categories);
   } catch (error) {
     return res.status(500).send(error.message);
@@ -52,10 +99,44 @@ const getAllCategories = async (req, res) => {
 };
 
 /**
- * Gets a single category by it's id
- * @param {*} req
- * @param {*} res
- * @returns boolean
+ * @swagger
+ * /categories/{id}:
+ *   get:
+ *     summary: Retorna uma categoria pelo ID
+ *     tags: [Categories]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         description: ID da categoria
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Categoria encontrada com sucesso
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id:
+ *                   type: string
+ *                   description: ID da categoria
+ *                 name:
+ *                   type: string
+ *                   description: Nome da categoria
+ *                 createdAt:
+ *                   type: string
+ *                   format: date-time
+ *                   description: Data de criação
+ *                 updatedAt:
+ *                   type: string
+ *                   format: date-time
+ *                   description: Data da última atualização
+ *       404:
+ *         description: Categoria não encontrada
+ *       500:
+ *         description: Erro no servidor
  */
 const getCategoryById = async (req, res) => {
   try {
@@ -79,16 +160,41 @@ const getCategoryById = async (req, res) => {
 };
 
 /**
- * Updates a single category by it's id
- * @param {*} req
- * @param {*} res
- * @returns boolean
+ * @swagger
+ * /categories/{id}:
+ *   put:
+ *     summary: Atualiza uma categoria pelo ID
+ *     tags: [Categories]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         description: ID da categoria a ser atualizada
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Nome da categoria
+ *     responses:
+ *       200:
+ *         description: Categoria atualizada com sucesso
+ *       400:
+ *         description: Dados inválidos fornecidos para a atualização
+ *       404:
+ *         description: Categoria não encontrada
+ *       500:
+ *         description: Erro no servidor
  */
 const updateCategory = async (req, res) => {
   try {
-    const { id } = req.params;
-    const [updated] = await Category.update(req.body, { where: { id: id } });
-
+    const job = await categoryQueue.add({ operation: 'update', data: { id, updatedData } });
     if (updated) {
       const updatedCategory = await Category.findOne({
         where: { id: id },
@@ -98,20 +204,39 @@ const updateCategory = async (req, res) => {
           },
         ],
       });
-      return res.status(200).json(updatedCategory);
+      await redis.del('categories:list');
+      console.log("invalidado cache de categorias");
+      const { id } = req.params;
+      const updatedData = {
+        ...req.body,
+      };
     }
-
-    throw new Error('Category not found ');
+    return res.status(201).json({ message: 'Atualização de categoria em processamento', jobId: job.id });
   } catch (error) {
     return res.status(500).send(error.message);
   }
 };
 
 /**
- * Deletes a single category by it's id
- * @param {*} req
- * @param {*} res
- * @returns Boolean
+ * @swagger
+ * /categories/{id}:
+ *   delete:
+ *     summary: Deleta uma categoria pelo ID
+ *     tags: [Categories]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         description: ID da categoria a ser deletada
+ *         schema:
+ *           type: string
+ *     responses:
+ *       204:
+ *         description: Categoria deletada com sucesso
+ *       404:
+ *         description: Categoria não encontrada
+ *       500:
+ *         description: Erro no servidor
  */
 const deleteCategory = async (req, res) => {
   try {
@@ -123,6 +248,8 @@ const deleteCategory = async (req, res) => {
     });
 
     if (deleted) {
+      await redis.del('categories:list');
+      console.log("invalidado cache de categorias");
       return res.status(204).send('Category deleted');
     }
 
@@ -134,7 +261,7 @@ const deleteCategory = async (req, res) => {
 
 module.exports = {
   createCategory,
-  getAllCategories: [authMiddleware, getAllCategories],
+  getAllCategories,
   getCategoryById,
   updateCategory,
   deleteCategory,

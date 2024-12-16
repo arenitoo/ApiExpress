@@ -8,6 +8,8 @@ const cors = require('cors')
 const logger = require('morgan')
 const helmet = require('helmet')
 const cookieParser = require('cookie-parser');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./config/swaggerConfig');
 
 // Routes import
 const routes = require('./routes')
@@ -35,6 +37,7 @@ app.use(cookieParser());
 
 // Routes middleware
 app.use('/api', routes)
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }))
 
 // Port listener
 app.listen(port, () => {
